@@ -372,29 +372,12 @@ def complete_handover(handover_id: int) -> dict:
             "UPDATE handovers SET status = '失败', reason = ?, finished_at = ? WHERE id = ?",
             (failed.reason, now_iso(), handover_id),
         )
-        # 只解冻本段双方；上一段接班方已固化为新的交班方资产，不受影响
+        # 只解冻本段双方；前序已完成段已在各自段级事务中提交，
+        # 其单据状态、清单与批次过户结果一律不触碰（兜底触发器亦禁止回滚）
         conn.execute("UPDATE shifts SET status = '值班中' WHERE id = ?", (h["from_shift_id"],))
         conn.execute("UPDATE shifts SET status = '空闲' WHERE id = ?", (h["to_shift_id"],))
         if h["relay_plan_id"] is not None:
-            prev_rows = conn.execute(
-                """
-                SELECT id, from_shift_id FROM handovers
-                WHERE relay_plan_id = ? AND status = '已完成'
-                """,
-                (h["relay_plan_id"],),
-            ).fetchall()
-            for prev in prev_rows:
-                conn.execute(
-                    """
-                    UPDATE batches SET owner_shift_id = ?
-                    WHERE id IN (SELECT batch_id FROM handover_items WHERE handover_id = ?)
-                    """,
-                    (prev["from_shift_id"], prev["id"]),
-                )
-                conn.execute(
-                    "UPDATE handovers SET status = '进行中', finished_at = NULL WHERE id = ?",
-                    (prev["id"],),
-                )
+            # 失败隔离只到段：计划停在「段失败」，已完成段保持原样
             seg = h["relay_seq"]
             conn.execute(
                 "UPDATE relay_plans SET status = '段失败', reason = ? WHERE id = ?",
@@ -471,31 +454,12 @@ def fail_handover(handover_id: int, reason: str) -> dict:
         conn.execute("UPDATE shifts SET status = '值班中' WHERE id = ?", (h["from_shift_id"],))
         conn.execute("UPDATE shifts SET status = '空闲' WHERE id = ?", (h["to_shift_id"],))
         if h["relay_plan_id"] is not None:
-            prev_rows = conn.execute(
-                """
-                SELECT id, from_shift_id FROM handovers
-                WHERE relay_plan_id = ? AND status = '已完成'
-                """,
-                (h["relay_plan_id"],),
-            ).fetchall()
-            for prev in prev_rows:
-                conn.execute(
-                    """
-                    UPDATE batches SET owner_shift_id = ?
-                    WHERE id IN (SELECT batch_id FROM handover_items WHERE handover_id = ?)
-                    """,
-                    (prev["from_shift_id"], prev["id"]),
-                )
-                conn.execute(
-                    "UPDATE handovers SET status = '进行中', finished_at = NULL WHERE id = ?",
-                    (prev["id"],),
-                )
+            # 只把计划停在「段失败」：不回滚、不触碰前序已完成段的单据与批次归属
             conn.execute(
                 "UPDATE relay_plans SET status = '段失败', reason = ? WHERE id = ?",
                 (f"段{h['relay_seq']}失败：人工判定 {reason}", h["relay_plan_id"]),
             )
     return get_handover(handover_id)
-
 
 
 def list_reconcile() -> list[dict]:

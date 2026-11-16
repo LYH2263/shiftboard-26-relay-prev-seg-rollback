@@ -37,28 +37,9 @@ def complete(handover_id: int):
 
 @router.post("/{handover_id}/fail")
 def fail(handover_id: int, body: FailBody):
-    result = svc.fail_handover(handover_id, body.reason)
-    if result.get("relay_plan_id"):
-        from app.db import connect
-
-        with connect() as conn:
-            prev_rows = conn.execute(
-                """
-                SELECT id, from_shift_id FROM handovers
-                WHERE relay_plan_id = ? AND relay_seq < ? AND status = '已完成'
-                """,
-                (result["relay_plan_id"], result["relay_seq"]),
-            ).fetchall()
-            for prev in prev_rows:
-                conn.execute(
-                    """
-                    UPDATE batches SET owner_shift_id = ?
-                    WHERE id IN (SELECT batch_id FROM handover_items WHERE handover_id = ?)
-                    """,
-                    (prev["from_shift_id"], prev["id"]),
-                )
-            conn.commit()
-    return result
+    # 失败隔离完全收敛在服务层的段级事务内：只关本段、解冻本段双方，
+    # 路由层不得另开连接回滚前序已完成段的过户
+    return svc.fail_handover(handover_id, body.reason)
 
 
 @router.post("/{handover_id}/close")
