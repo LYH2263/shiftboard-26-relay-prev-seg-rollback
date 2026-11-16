@@ -1,0 +1,9 @@
+node_modules/
+__pycache__/
+.pytest_cache/
+backend/data/
+backend/data_test/
+backend/data_test_relay/
+backend/.venv/
+dist/
+*.pyc
